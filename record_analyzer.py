@@ -44,6 +44,9 @@ try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
     from record_dialog import HinshokuDetailDialog
+    from ui_style import (
+        ERROR_BG, ERROR_TEXT, apply_style, style_toplevel, stripe_treeview, stripe_tag,
+    )
 except ImportError:
     import types
     _stub = object
@@ -59,6 +62,19 @@ except ImportError:
     messagebox = None
     filedialog = None
     HinshokuDetailDialog = None
+    ERROR_BG = ERROR_TEXT = None
+
+    def apply_style(root):
+        pass
+
+    def style_toplevel(window):
+        pass
+
+    def stripe_treeview(tree, tag_odd="oddrow", tag_even="evenrow"):
+        pass
+
+    def stripe_tag(index, tag_odd="oddrow", tag_even="evenrow"):
+        return tag_odd if index % 2 == 1 else tag_even
 
 from csv_normalizer import normalize_columns
 from config_loader import load_config, save_product_names
@@ -411,6 +427,8 @@ class RecordAnalyzerApp:
         self.root = root
         self.root.title("RECORD集計")
         self.root.geometry("1200x700")
+        apply_style(self.root)
+        style_toplevel(self.root)
 
         self.record_dir = None
         self.file_index = {}      # relpath -> info
@@ -432,7 +450,7 @@ class RecordAnalyzerApp:
         top = ttk.Frame(parent, padding=10)
         top.pack(fill="x")
 
-        ttk.Button(top, text="📁 RECORDフォルダを選択",
+        ttk.Button(top, text="📁 RECORDフォルダを選択", style="Accent.TButton",
                    command=self._on_select_folder).pack(side="left")
 
         self.folder_label_var = tk.StringVar(value="（フォルダ未選択）")
@@ -493,7 +511,8 @@ class RecordAnalyzerApp:
                 anchor = "w"
             self.tree.column(col, anchor=anchor, width=col_widths[col])
 
-        self.tree.tag_configure("error", background="#FFE4E1")
+        stripe_treeview(self.tree)
+        self.tree.tag_configure("error", background=ERROR_BG, foreground=ERROR_TEXT)
 
         # ダブルクリック / Enter で詳細画面を開く
         self.tree.bind("<Double-1>", self._on_row_activate)
@@ -658,15 +677,15 @@ class RecordAnalyzerApp:
 
         keyword = self.search_var.get().strip()
 
+        row_idx = 0
         for agg in self.aggregates:
             hinshoku = agg["品種番号"]
             product_name = self.product_names.get(hinshoku, "")
             if keyword and keyword not in str(hinshoku) and keyword not in product_name:
                 continue
 
-            tags = ()
-            if hinshoku < 0:
-                tags = ("error",)
+            tags = ("error", stripe_tag(row_idx)) if hinshoku < 0 else (stripe_tag(row_idx),)
+            row_idx += 1
 
             self.tree.insert("", "end", tags=tags, values=(
                 hinshoku if hinshoku >= 0 else "(不明)",
@@ -768,6 +787,7 @@ class ProgressDialog(tk.Toplevel):
         self.cancel_event = cancel_event
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        style_toplevel(self)
         self.grab_set()
 
         frm = ttk.Frame(self, padding=20)
@@ -821,6 +841,7 @@ class ProductNamesDialog(tk.Toplevel):
         self.title("製品名マスター")
         self.resizable(True, True)
         self.geometry("450x500")
+        style_toplevel(self)
         self.grab_set()
 
         self._names: dict[int, str] = {int(k): str(v) for k, v in current_names.items()}
@@ -855,6 +876,7 @@ class ProductNamesDialog(tk.Toplevel):
         tree_frm.columnconfigure(0, weight=1)
 
         self.tree.bind("<Double-1>", lambda e: self._on_edit())
+        stripe_treeview(self.tree)
 
         btn_frm = ttk.Frame(frm)
         btn_frm.pack(fill="x", pady=(8, 0))
@@ -862,14 +884,16 @@ class ProductNamesDialog(tk.Toplevel):
         ttk.Button(btn_frm, text="追加", command=self._on_add).pack(side="left", padx=3)
         ttk.Button(btn_frm, text="編集", command=self._on_edit).pack(side="left", padx=3)
         ttk.Button(btn_frm, text="削除", command=self._on_delete).pack(side="left", padx=3)
-        ttk.Button(btn_frm, text="保存して閉じる", command=self._on_save).pack(side="right", padx=3)
+        ttk.Button(btn_frm, text="保存して閉じる", style="Accent.TButton",
+                   command=self._on_save).pack(side="right", padx=3)
         ttk.Button(btn_frm, text="キャンセル", command=self.destroy).pack(side="right", padx=3)
 
     def _refresh_tree(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
-        for num in sorted(self._names.keys()):
-            self.tree.insert("", "end", iid=str(num), values=(num, self._names[num]))
+        for row_idx, num in enumerate(sorted(self._names.keys())):
+            self.tree.insert("", "end", iid=str(num), tags=(stripe_tag(row_idx),),
+                              values=(num, self._names[num]))
 
     def _on_add(self):
         dlg = _ProductNameEditDialog(self, None, None)
@@ -916,6 +940,7 @@ class _ProductNameEditDialog(tk.Toplevel):
         super().__init__(parent)
         self.title("製品名の編集" if num is not None else "製品名の追加")
         self.resizable(False, False)
+        style_toplevel(self)
         self.grab_set()
         self.result = None
 
@@ -934,7 +959,8 @@ class _ProductNameEditDialog(tk.Toplevel):
 
         btn_frm = ttk.Frame(frm)
         btn_frm.grid(row=2, column=0, columnspan=2, pady=(10, 0))
-        ttk.Button(btn_frm, text="OK", command=self._on_ok).pack(side="left", padx=5)
+        ttk.Button(btn_frm, text="OK", style="Accent.TButton",
+                   command=self._on_ok).pack(side="left", padx=5)
         ttk.Button(btn_frm, text="キャンセル", command=self.destroy).pack(side="left", padx=5)
 
         (num_entry if num is None else name_entry).focus_set()

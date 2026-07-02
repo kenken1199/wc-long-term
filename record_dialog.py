@@ -14,7 +14,6 @@
 """
 
 import os
-import sys
 import threading
 import queue
 import datetime
@@ -26,7 +25,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, messagebox
 
 from record_loader import (
     load_hinshoku_data,
@@ -36,6 +35,7 @@ from record_loader import (
 )
 from record_export import export_hinshoku_detail
 from lot_analyze import LotPreviewDialog, process_lot, MIN_OK_COUNT
+from ui_style import ERROR_BG, ERROR_TEXT, style_toplevel, stripe_treeview, stripe_tag
 
 
 class HinshokuDetailDialog(tk.Toplevel):
@@ -67,6 +67,7 @@ class HinshokuDetailDialog(tk.Toplevel):
         self.title(f"品種詳細 - {self.display_name}")
         self.geometry("1100x720")
         self.resizable(True, True)
+        style_toplevel(self)
 
         self._build_ui()
 
@@ -241,15 +242,6 @@ class HinshokuDetailDialog(tk.Toplevel):
         def _v(v, digits=3):
             return f"{v:.{digits}f}" if v is not None else "-"
 
-        def _cap(v):
-            if v is None:
-                return "- (公称重量未登録)"
-            mark = " ✓" if v >= 1.33 else (" △" if v >= 1.00 else " ✗")
-            return f"{v:.3f}{mark}"
-
-        rl = self._reject_limit
-        nw_str = f"{self._nominal_weight:.3f} g" if self._nominal_weight is not None else "未登録"
-
         rows = [
             ("件数", f"{s['件数']:,}"),
             ("平均(g)", _v(s["平均"], 4)),
@@ -259,13 +251,7 @@ class HinshokuDetailDialog(tk.Toplevel):
             ("", ""),
             ("下限 −3σ (g)", _v(s["推奨下限"], 4)),
             ("上限 +3σ (g)", _v(s["推奨上限"], 4)),
-            ("95%CI 下限(g)", _v(s["CI下限"], 4)),
-            ("95%CI 上限(g)", _v(s["CI上限"], 4)),
             ("外れ値件数", f"{s['外れ値件数']:,}"),
-            ("", ""),
-            (f"工程実績性能  規格=±{rl}g / 公称={nw_str}", "≥1.33 推奨"),
-            ("Pp",  _cap(s.get("Pp"))),
-            ("Ppk", _cap(s.get("Ppk"))),
             ("", ""),
             ("総件数", f"{a.get('総件数', 0):,}"),
             ("不良率(%)", f"{a.get('不良率(%)', 0):.3f}"),
@@ -435,10 +421,11 @@ class HinshokuDetailDialog(tk.Toplevel):
                 anchor = "w"
             self._daily_tree.column(col, anchor=anchor, width=widths[col])
 
-        self._daily_tree.tag_configure("abnormal", background="#FFE4E1")
+        stripe_treeview(self._daily_tree)
+        self._daily_tree.tag_configure("abnormal", background=ERROR_BG, foreground=ERROR_TEXT)
 
-        for _, row in self.daily_df.iterrows():
-            tags = ("abnormal",) if row.get("異常フラグ") else ()
+        for row_idx, (_, row) in enumerate(self.daily_df.iterrows()):
+            tags = ("abnormal", stripe_tag(row_idx)) if row.get("異常フラグ") else (stripe_tag(row_idx),)
             mean_v = row["平均(g)"]
             std_v = row["σ(g)"]
             min_v = row["Min(g)"]
@@ -503,7 +490,7 @@ class HinshokuDetailDialog(tk.Toplevel):
 
         df_lots = dialog.result[1]
 
-        save_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        save_dir = os.path.join(os.path.expanduser("~"), "Desktop")
 
         created_lots = []
         skipped_lots = []
@@ -523,7 +510,7 @@ class HinshokuDetailDialog(tk.Toplevel):
             msg += "\nしきい値を変更するか、CSVの内容をご確認ください。"
             messagebox.showerror("作成失敗", msg, parent=self)
         elif skipped_lots:
-            msg = f"Excel作成完了\n作成: {len(created_lots)}ファイル\n\n"
+            msg = f"Excel作成完了\n作成: {len(created_lots)}ファイル（デスクトップに保存しました）\n\n"
             msg += "⚠ 以下のロットはOKデータ不足のためスキップしました:\n"
             for lot, ok, total in skipped_lots:
                 msg += f"  ・ロット{lot}: 総{total}件 / OK{ok}件\n"
@@ -532,7 +519,7 @@ class HinshokuDetailDialog(tk.Toplevel):
         else:
             messagebox.showinfo(
                 "完了",
-                f"Excel作成完了\n{len(created_lots)}ファイルを作成しました。",
+                f"Excel作成完了\n{len(created_lots)}ファイルをデスクトップに保存しました。",
                 parent=self,
             )
 
@@ -567,6 +554,7 @@ class HinshokuDetailDialog(tk.Toplevel):
         self.export_btn = ttk.Button(
             frame,
             text="📤 Excelに出力する",
+            style="Accent.TButton",
             command=self._on_export,
             state="disabled",
         )
@@ -591,15 +579,8 @@ class HinshokuDetailDialog(tk.Toplevel):
             f"品種詳細_{safe_name}_"
             f"{datetime.datetime.now():%Y%m%d_%H%M}.xlsx"
         )
-        filepath = filedialog.asksaveasfilename(
-            parent=self,
-            defaultextension=".xlsx",
-            initialfile=default_name,
-            initialdir=self.record_dir,
-            filetypes=[("Excel files", "*.xlsx")],
-        )
-        if not filepath:
-            return
+        save_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+        filepath = os.path.join(save_dir, default_name)
 
         try:
             self.export_status_var.set("出力中...")
@@ -618,7 +599,7 @@ class HinshokuDetailDialog(tk.Toplevel):
             self.export_status_var.set(f"✓ 出力完了: {os.path.basename(filepath)}")
             messagebox.showinfo(
                 "完了",
-                f"Excelファイルを出力しました:\n{filepath}",
+                f"Excelファイルをデスクトップに保存しました:\n{os.path.basename(filepath)}",
                 parent=self,
             )
         except Exception as e:

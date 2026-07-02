@@ -7,6 +7,9 @@ from scipy import stats
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
+    from ui_style import (
+        ERROR_BG, ERROR_TEXT, style_toplevel, stripe_treeview, stripe_tag,
+    )
 except ImportError:
     import types
     _stub = object
@@ -14,6 +17,16 @@ except ImportError:
     ttk = types.SimpleNamespace(Frame=_stub, Button=_stub, Label=_stub, Entry=_stub, Treeview=_stub, Scrollbar=_stub, Spinbox=_stub, Notebook=_stub)
     messagebox = None
     filedialog = None
+    ERROR_BG = ERROR_TEXT = None
+
+    def style_toplevel(window):
+        pass
+
+    def stripe_treeview(tree, tag_odd="oddrow", tag_even="evenrow"):
+        pass
+
+    def stripe_tag(index, tag_odd="oddrow", tag_even="evenrow"):
+        return tag_odd if index % 2 == 1 else tag_even
 import datetime
 from io import BytesIO
 import os
@@ -41,6 +54,7 @@ class LotPreviewDialog(tk.Toplevel):
         self.hinshoku_num = hinshoku_num
         self.product_name = product_name
         self.resizable(True, True)
+        style_toplevel(self)
         self.grab_set()
 
         # --- しきい値入力 ---
@@ -83,8 +97,9 @@ class LotPreviewDialog(tk.Toplevel):
             self.tree.heading(col, text=col)
             self.tree.column(col, anchor="center", width=col_widths[col])
 
-        # 警告色タグ（OKデータ不足のロットを赤系で強調）
-        self.tree.tag_configure("skip", background="#FFE4E1", foreground="#9C0006")
+        # 縞模様 + 警告色タグ（OKデータ不足のロットを赤系で強調）
+        stripe_treeview(self.tree)
+        self.tree.tag_configure("skip", background=ERROR_BG, foreground=ERROR_TEXT)
 
         scrollbar = ttk.Scrollbar(frame_tree, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -151,7 +166,7 @@ class LotPreviewDialog(tk.Toplevel):
         else:
             hinshoku_display = "-"
 
-        for lot, group in df.groupby("ロット"):
+        for row_idx, (lot, group) in enumerate(df.groupby("ロット")):
             start = group["日付時刻"].min()
             end = group["日付時刻"].max()
             total = len(group)
@@ -159,11 +174,11 @@ class LotPreviewDialog(tk.Toplevel):
 
             if ok_count < MIN_OK_COUNT:
                 state = "⚠ スキップ予定"
-                tags = ("skip",)
+                tags = ("skip", stripe_tag(row_idx))
                 skip_count += 1
             else:
                 state = "✓ 分析対象"
-                tags = ()
+                tags = (stripe_tag(row_idx),)
 
             self.tree.insert("", "end", tags=tags, values=(
                 hinshoku_display,
@@ -240,13 +255,14 @@ class LotDetailDialog(tk.Toplevel):
         self.title(f"ロット{lot_num} 詳細  {display}")
         self.geometry("1000x680")
         self.resizable(True, True)
+        style_toplevel(self)
 
         stats = self._compute_stats()
         if stats is None:
             ttk.Label(
                 self,
                 text=f"OKデータが {MIN_OK_COUNT} 件未満のため統計計算できません",
-                font=("", 12), foreground="#9C0006",
+                font=("", 12), foreground=ERROR_TEXT,
             ).pack(expand=True)
             return
 
@@ -293,19 +309,25 @@ class LotDetailDialog(tk.Toplevel):
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=10, pady=10)
 
-        tab_sum = ttk.Frame(nb)
-        tab_ts  = ttk.Frame(nb)
-        tab_ok  = ttk.Frame(nb)
-        tab_out = ttk.Frame(nb)
-        tab_exp = ttk.Frame(nb)
+        tab_sum     = ttk.Frame(nb)
+        tab_ts_all  = ttk.Frame(nb)
+        tab_all     = ttk.Frame(nb)
+        tab_ts      = ttk.Frame(nb)
+        tab_ok      = ttk.Frame(nb)
+        tab_out     = ttk.Frame(nb)
+        tab_exp     = ttk.Frame(nb)
 
-        nb.add(tab_sum, text="📊 サマリー")
-        nb.add(tab_ts,  text="📈 時系列チャート")
-        nb.add(tab_ok,  text="✅ OKデータ")
-        nb.add(tab_out, text="⚠ 外れ値")
-        nb.add(tab_exp, text="💾 エクスポート")
+        nb.add(tab_sum,    text="📊 サマリー")
+        nb.add(tab_ts_all, text="📈 時系列チャート（全数）")
+        nb.add(tab_all,    text="🔢 全数データ")
+        nb.add(tab_ts,     text="📈 時系列チャート（OK品のみ）")
+        nb.add(tab_ok,     text="✅ OKデータ")
+        nb.add(tab_out,    text="⚠ 外れ値")
+        nb.add(tab_exp,    text="💾 エクスポート")
 
         self._build_summary_tab(tab_sum, Figure, FigureCanvasTkAgg)
+        self._build_all_series_tab(tab_ts_all, Figure, FigureCanvasTkAgg, NavigationToolbar2Tk)
+        self._build_all_data_tab(tab_all)
         self._build_series_tab(tab_ts, Figure, FigureCanvasTkAgg, NavigationToolbar2Tk)
         self._build_ok_tab(tab_ok)
         self._build_outlier_tab(tab_out)
@@ -418,6 +440,111 @@ class LotDetailDialog(tk.Toplevel):
         tb_frame.pack(fill="x", padx=10)
         NavigationToolbar2Tk(canvas, tb_frame)
 
+    # ------ タブ2b: 時系列チャート（全数） ------
+    def _build_all_series_tab(self, parent, Figure, FigureCanvasTkAgg, NavigationToolbar2Tk):
+        group_sorted = self._df_lot.sort_values("日付時刻").reset_index(drop=True)
+        ok_mask    = group_sorted["ランクコード"] == "2"
+        kacho_mask = group_sorted["ランクコード"] == "E"
+        keiry_mask = group_sorted["ランクコード"] == "1"
+
+        y_vals_all  = pd.to_numeric(group_sorted["測定値(g)"], errors="coerce")
+        y_ok_all    = y_vals_all[ok_mask].values
+        y_kacho_all = y_vals_all[kacho_mask].values
+        y_keiry_all = y_vals_all[keiry_mask].values
+
+        fig = Figure(figsize=(11, 5), dpi=90)
+        ax = fig.add_subplot(111)
+
+        if group_sorted["日付時刻"].notna().any():
+            x_ok_all    = group_sorted.loc[ok_mask,    "日付時刻"]
+            x_kacho_all = group_sorted.loc[kacho_mask, "日付時刻"]
+            x_keiry_all = group_sorted.loc[keiry_mask, "日付時刻"]
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            fig.autofmt_xdate(rotation=30)
+            ax.set_xlabel("時刻", fontsize=12)
+        else:
+            x_base      = np.arange(1, len(group_sorted) + 1)
+            x_ok_all    = x_base[ok_mask.values]
+            x_kacho_all = x_base[kacho_mask.values]
+            x_keiry_all = x_base[keiry_mask.values]
+            ax.set_xlabel("測定順序", fontsize=12)
+
+        ax.plot(x_ok_all, y_ok_all, color="steelblue", linewidth=0.6, alpha=0.4, zorder=1)
+        ax.scatter(x_ok_all, y_ok_all, color="steelblue", s=18, alpha=0.8, zorder=2,
+                   label=f"OK ({ok_mask.sum()}件)")
+        if kacho_mask.any():
+            ax.scatter(x_kacho_all, y_kacho_all, color="red", s=60, marker="^", zorder=4,
+                       label=f"過量 ({kacho_mask.sum()}件)")
+        if keiry_mask.any():
+            ax.scatter(x_keiry_all, y_keiry_all, color="orange", s=60, marker="v", zorder=4,
+                       label=f"軽量 ({keiry_mask.sum()}件)")
+
+        ax.axhline(self.mean,  color="red",        linewidth=1.5, linestyle="-",  label=f"平均（OK品）: {self.mean:.3f}")
+        ax.axhline(self.upper, color="darkorange", linewidth=1.5, linestyle="--", label=f"+3σ（OK品）: {self.upper:.3f}")
+        ax.axhline(self.lower, color="darkorange", linewidth=1.5, linestyle="--", label=f"-3σ（OK品）: {self.lower:.3f}")
+
+        y_lo = self.mean - 10 * self.std
+        y_hi = self.mean + 10 * self.std
+        data_min = y_vals_all.min()
+        data_max = y_vals_all.max()
+        pad = max((data_max - data_min) * 0.12, self.std * 2)
+        y_lo = min(y_lo, data_min - pad)
+        y_hi = max(y_hi, data_max + pad)
+        ax.set_ylim(y_lo, y_hi)
+
+        ax.set_title(f"ロット{self.lot_num} 全数時系列チャート (n={len(group_sorted):,})", fontsize=12, fontweight="bold")
+        ax.set_ylabel("測定値(g)", fontsize=12)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=parent)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=5)
+        canvas.draw()
+
+        tb_frame = ttk.Frame(parent)
+        tb_frame.pack(fill="x", padx=10)
+        NavigationToolbar2Tk(canvas, tb_frame)
+
+    # ------ タブ2c: 全数データ ------
+    def _build_all_data_tab(self, parent):
+        frame = ttk.Frame(parent, padding=10)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="※ 赤色行がNG（軽量・過量）です",
+                  foreground=ERROR_TEXT).pack(anchor="w", pady=(0, 5))
+
+        ng_labels = {"軽量", "過量"}
+        cols = ("測定値出力No.", "日付時刻", "測定値(g)", "ランクコード")
+        tree = ttk.Treeview(frame, columns=cols, show="headings")
+        stripe_treeview(tree)
+        tree.tag_configure("ng", background=ERROR_BG, foreground=ERROR_TEXT)
+        tree.column("測定値出力No.", anchor="center", width=130)
+        tree.column("日付時刻",     anchor="center", width=170)
+        tree.column("測定値(g)",    anchor="e",      width=100)
+        tree.column("ランクコード",  anchor="center", width=100)
+        for col in cols:
+            tree.heading(col, text=col)
+
+        group_sorted = self._df_lot.sort_values("日付時刻")
+        for row_idx, (_, row) in enumerate(group_sorted.iterrows()):
+            dt  = row["日付時刻"]
+            val = row["測定値(g)"]
+            rank_label = _RANK_LABEL_MAP.get(row["ランクコード"], row["ランクコード"])
+            dt_str = dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt) else "-"
+            tags = ("ng", stripe_tag(row_idx)) if rank_label in ng_labels else (stripe_tag(row_idx),)
+            tree.insert("", "end",
+                        tags=tags,
+                        values=(row["測定値出力No."], dt_str,
+                                f"{val:.3f}" if pd.notna(val) else "-",
+                                rank_label))
+
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
     # ------ タブ3: OKデータ ------
     def _build_ok_tab(self, parent):
         outlier_nos = set(self.outliers_df["測定値出力No."].values)
@@ -425,24 +552,26 @@ class LotDetailDialog(tk.Toplevel):
         frame.pack(fill="both", expand=True)
 
         ttk.Label(frame, text="※ 赤色行が外れ値（±3σ超）です",
-                  foreground="#9C0006").pack(anchor="w", pady=(0, 5))
+                  foreground=ERROR_TEXT).pack(anchor="w", pady=(0, 5))
 
         cols = ("測定値出力No.", "日付時刻", "測定値(g)")
         tree = ttk.Treeview(frame, columns=cols, show="headings")
-        tree.tag_configure("outlier", background="#FFCCCC", foreground="#9C0006")
+        stripe_treeview(tree)
+        tree.tag_configure("outlier", background=ERROR_BG, foreground=ERROR_TEXT)
         tree.column("測定値出力No.", anchor="center", width=130)
         tree.column("日付時刻",     anchor="center", width=170)
         tree.column("測定値(g)",    anchor="e",      width=100)
         for col in cols:
             tree.heading(col, text=col)
 
-        for _, row in self.df_ok.iterrows():
+        for row_idx, (_, row) in enumerate(self.df_ok.iterrows()):
             dt  = row["日付時刻"]
             val = row["測定値(g)"]
             dt_str = dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt) else "-"
             is_out = row["測定値出力No."] in outlier_nos
+            tags = ("outlier", stripe_tag(row_idx)) if is_out else (stripe_tag(row_idx),)
             tree.insert("", "end",
-                        tags=("outlier",) if is_out else (),
+                        tags=tags,
                         values=(row["測定値出力No."], dt_str,
                                 f"{val:.3f}" if pd.notna(val) else "-"))
 
@@ -461,17 +590,18 @@ class LotDetailDialog(tk.Toplevel):
 
         cols = ("測定値出力No.", "日付時刻", "測定値(g)")
         tree = ttk.Treeview(frame, columns=cols, show="headings")
+        stripe_treeview(tree)
         tree.column("測定値出力No.", anchor="center", width=130)
         tree.column("日付時刻",     anchor="center", width=170)
         tree.column("測定値(g)",    anchor="e",      width=100)
         for col in cols:
             tree.heading(col, text=col)
 
-        for _, row in self.outliers_df.iterrows():
+        for row_idx, (_, row) in enumerate(self.outliers_df.iterrows()):
             dt  = row["日付時刻"]
             val = row["測定値(g)"]
             dt_str = dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt) else "-"
-            tree.insert("", "end", values=(
+            tree.insert("", "end", tags=(stripe_tag(row_idx),), values=(
                 row["測定値出力No."], dt_str,
                 f"{val:.3f}" if pd.notna(val) else "-",
             ))
@@ -531,14 +661,8 @@ class LotDetailDialog(tk.Toplevel):
             chart_prefix = f"ロット{self.lot_num}　"
             default_name = f"分析結果_ロット{self.lot_num}_{datetime.datetime.now():%Y%m%d_%H%M}.xlsx"
 
-        filepath = filedialog.asksaveasfilename(
-            parent=self,
-            defaultextension=".xlsx",
-            initialfile=default_name,
-            filetypes=[("Excel files", "*.xlsx")],
-        )
-        if not filepath:
-            return
+        save_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+        filepath = os.path.join(save_dir, default_name)
 
         try:
             self._export_status_var.set("出力中...")
@@ -563,7 +687,11 @@ class LotDetailDialog(tk.Toplevel):
                 mfg_start=mfg_start, mfg_end=mfg_end, mfg_duration=mfg_duration,
             )
             self._export_status_var.set(f"✓ 出力完了: {os.path.basename(filepath)}")
-            messagebox.showinfo("完了", f"Excelファイルを出力しました:\n{filepath}", parent=self)
+            messagebox.showinfo(
+                "完了",
+                f"Excelファイルをデスクトップに保存しました:\n{os.path.basename(filepath)}",
+                parent=self,
+            )
         except Exception as e:
             import traceback
             self._export_status_var.set("出力失敗")

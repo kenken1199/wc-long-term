@@ -16,6 +16,11 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.drawing.image import Image
 from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
 
+from ui_style import (
+    APP_BG, APP_TEXT, APP_SUBTEXT, APP_ACCENT, APP_ACCENT_ACTIVE,
+    ERROR_BG, ERROR_TEXT, apply_style, style_toplevel, stripe_treeview, stripe_tag,
+)
+
 
 # =========================
 # ■ 定数
@@ -23,32 +28,9 @@ from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
 MIN_OK_COUNT = 2    # 統計分析に必要な最小OKデータ数
 _RANK_LABEL_MAP = {"2": "OK", "1": "軽量", "E": "過量", "0": "２個乗り"}
 
-# --- 配色（親しみやすいGUI用） ---
-APP_BG       = "#FAF6F0"
-APP_TEXT     = "#3A4750"
-APP_SUBTEXT  = "#7D8A93"
-APP_ACCENT   = "#5B9BD5"
-APP_ACCENT_ACTIVE = "#4A85BB"
-
 
 def _setup_app_style():
-    style = ttk.Style()
-    style.theme_use("clam")
-    style.configure(".", background=APP_BG, foreground=APP_TEXT, font=("", 10))
-    style.configure("TFrame", background=APP_BG)
-    style.configure("TLabel", background=APP_BG, foreground=APP_TEXT)
-    style.configure("TButton", background="#E8E2D8", foreground=APP_TEXT, padding=6)
-    style.map("TButton", background=[("active", "#DDD6C8")])
-    style.configure("Accent.TButton", background=APP_ACCENT, foreground="white",
-                     padding=8, font=("", 10, "bold"))
-    style.map("Accent.TButton", background=[("active", APP_ACCENT_ACTIVE)],
-              foreground=[("active", "white")])
-    style.configure("Toolbutton", background="white", foreground=APP_TEXT, padding=6)
-    style.map("Toolbutton", background=[("selected", APP_ACCENT)],
-              foreground=[("selected", "white")])
-    style.configure("Treeview", background="white", fieldbackground="white", rowheight=26)
-    style.configure("Treeview.Heading", background="#E8E2D8", foreground=APP_TEXT,
-                     font=("", 10, "bold"))
+    apply_style(app_root)
 
 
 def _hinshoku_display(hinshoku_num):
@@ -84,7 +66,7 @@ class LotPreviewDialog(tk.Toplevel):
         self.df = df.copy()
         self.hinshoku_num = hinshoku_num
         self.resizable(True, True)
-        self.configure(bg=APP_BG)
+        style_toplevel(self)
         self.grab_set()
 
         # --- しきい値入力 ---
@@ -119,8 +101,9 @@ class LotPreviewDialog(tk.Toplevel):
             self.tree.heading(col, text=col)
             self.tree.column(col, anchor="center", width=col_widths[col])
 
-        # 警告色タグ（OKデータ不足のロットを赤系で強調）
-        self.tree.tag_configure("skip", background="#FFE4E1", foreground="#9C0006")
+        # 縞模様 + 警告色タグ（OKデータ不足のロットを赤系で強調）
+        stripe_treeview(self.tree)
+        self.tree.tag_configure("skip", background=ERROR_BG, foreground=ERROR_TEXT)
 
         scrollbar = ttk.Scrollbar(frame_tree, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -130,7 +113,7 @@ class LotPreviewDialog(tk.Toplevel):
         # --- 注意書きラベル ---
         self.warn_label_var = tk.StringVar()
         warn_label = ttk.Label(self, textvariable=self.warn_label_var,
-                               foreground="#9C0006", padding=(10, 0))
+                               foreground=ERROR_TEXT, padding=(10, 0))
         warn_label.pack(fill="x")
 
         # --- ボタン ---
@@ -166,7 +149,7 @@ class LotPreviewDialog(tk.Toplevel):
 
         hinshoku_display = _hinshoku_display(self.hinshoku_num) or "-"
 
-        for lot, group in df.groupby("ロット"):
+        for row_idx, (lot, group) in enumerate(df.groupby("ロット")):
             start = group["日付時刻"].min()
             end = group["日付時刻"].max()
             total = len(group)
@@ -174,11 +157,11 @@ class LotPreviewDialog(tk.Toplevel):
 
             if ok_count < MIN_OK_COUNT:
                 state = "⚠ スキップ予定"
-                tags = ("skip",)
+                tags = ("skip", stripe_tag(row_idx))
                 skip_count += 1
             else:
                 state = "✓ 分析対象"
-                tags = ()
+                tags = (stripe_tag(row_idx),)
 
             self.tree.insert("", "end", tags=tags, values=(
                 hinshoku_display,
@@ -1098,7 +1081,7 @@ if __name__ == "__main__":
     app_root.protocol("WM_DELETE_WINDOW", on_closing)
     _setup_app_style()
 
-    app_root.configure(bg=APP_BG)
+    style_toplevel(app_root)
 
     frame = tk.Frame(app_root, bg=APP_BG, padx=40, pady=32)
     frame.pack()
