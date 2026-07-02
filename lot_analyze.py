@@ -26,6 +26,7 @@ font_utils.setup_japanese_font()
 # ■ 定数
 # =========================
 MIN_OK_COUNT = 2  # 統計分析に必要な最小OKデータ数
+_RANK_LABEL_MAP = {"2": "OK", "1": "軽量", "E": "過量", "0": "２個乗り"}
 
 # =========================
 # ■ ロットプレビューダイアログ
@@ -50,12 +51,24 @@ class LotPreviewDialog(tk.Toplevel):
         self.threshold_var = tk.IntVar(value=30)
         ttk.Spinbox(
             frame_top, from_=1, to=480,
-            textvariable=self.threshold_var, width=6
+            textvariable=self.threshold_var, width=6,
         ).pack(side="left", padx=5)
-        ttk.Button(frame_top, text="更新", command=self._update_preview).pack(side="left", padx=5)
+
+        # プリセットボタン（クリックで即時反映）
+        presets = [("15分", 15), ("30分", 30), ("1時間", 60), ("2時間", 120), ("4時間", 240)]
+        frame_presets = ttk.Frame(frame_top)
+        frame_presets.pack(side="left", padx=(10, 0))
+        for label, minutes in presets:
+            ttk.Button(
+                frame_presets, text=label, width=6,
+                command=lambda m=minutes: self._set_threshold(m),
+            ).pack(side="left", padx=2)
 
         self.lot_label_var = tk.StringVar()
         ttk.Label(frame_top, textvariable=self.lot_label_var, foreground="navy").pack(side="left", padx=15)
+
+        # スピンボックスへの直接入力もリアルタイムに反映
+        self.threshold_var.trace_add("write", self._on_threshold_change)
 
         # --- Treeview ---
         frame_tree = ttk.Frame(self, padding=10)
@@ -93,7 +106,6 @@ class LotPreviewDialog(tk.Toplevel):
         frame_btn.pack(fill="x")
         ttk.Button(frame_btn, text="この分割でOK", command=self._on_ok).pack(side="left", padx=5)
         ttk.Button(frame_btn, text="ロット分割しない", command=self._on_no_split).pack(side="left", padx=5)
-        ttk.Button(frame_btn, text="手動分割する", command=self._on_manual).pack(side="left", padx=5)
         ttk.Button(frame_btn, text="キャンセル", command=self._on_cancel).pack(side="right", padx=5)
 
         self._update_preview()
@@ -109,8 +121,21 @@ class LotPreviewDialog(tk.Toplevel):
         df["ロット"] = (df["時間差(分)"] > threshold_min).cumsum() + 1
         return df
 
+    def _set_threshold(self, minutes):
+        self.threshold_var.set(minutes)
+
+    def _on_threshold_change(self, *_args):
+        try:
+            self.threshold_var.get()
+        except tk.TclError:
+            return  # 入力途中の空欄・不正値は無視
+        self._update_preview()
+
     def _update_preview(self):
-        threshold = self.threshold_var.get()
+        try:
+            threshold = self.threshold_var.get()
+        except tk.TclError:
+            return
         df = self._compute_lots(threshold)
 
         for item in self.tree.get_children():
@@ -173,10 +198,6 @@ class LotPreviewDialog(tk.Toplevel):
         df = self.df.copy()
         df["ロット"] = 1
         self.result = ("ok", df)
-        self.destroy()
-
-    def _on_manual(self):
-        self.result = ("manual", None)
         self.destroy()
 
     def _on_cancel(self):
@@ -243,10 +264,9 @@ class LotDetailDialog(tk.Toplevel):
 
     def _compute_stats(self):
         group = self._df_lot
-        rank_map = {"2": "OK", "1": "軽量", "E": "過量", "0": "２個乗り"}
         rank_counts = group["ランクコード"].value_counts().reset_index()
         rank_counts.columns = ["ランクコード", "件数"]
-        rank_counts["内容"] = rank_counts["ランクコード"].map(rank_map)
+        rank_counts["内容"] = rank_counts["ランクコード"].map(_RANK_LABEL_MAP)
         rank_counts = rank_counts[["ランクコード", "内容", "件数"]]
 
         total_count = len(group)
@@ -470,10 +490,12 @@ class LotDetailDialog(tk.Toplevel):
                   font=("", 11)).pack(anchor="w", pady=(0, 10))
         ttk.Label(frame, text=(
             "出力内容:\n"
-            "  ・分析レポート（統計値 + グラフ）\n"
-            "  ・OKデータ（外れ値は赤色）\n"
-            "  ・外れ値\n"
-            "  ・ランクコード集計"
+            "  ・分析レポート（統計値 + 製造情報 + グラフ）\n"
+            "  ・全データ時系列（OK/軽量/過量を色分け）\n"
+            "  ・全データ（NG行は赤色）\n"
+            "  ・ヒストグラム／時系列チャート（OK品のみ）\n"
+            "  ・全OKデータ（外れ値は赤色）\n"
+            "  ・全外れ値"
         ), justify="left").pack(anchor="w", pady=(0, 20))
 
         ttk.Button(frame, text="📤 Excelに出力する",
@@ -485,19 +507,28 @@ class LotDetailDialog(tk.Toplevel):
 
     def _on_export(self):
         lot_date = self._df_lot["日付時刻"].dropna().min()
+        lot_end  = self._df_lot["日付時刻"].dropna().max()
+        if pd.notna(lot_date) and pd.notna(lot_end):
+            mfg_start    = lot_date.strftime("%H:%M")
+            mfg_end      = lot_end.strftime("%H:%M")
+            total_min    = int((lot_end - lot_date).total_seconds() / 60)
+            mfg_duration = f"{total_min // 60}時間{total_min % 60:02d}分"
+        else:
+            mfg_start = mfg_end = mfg_duration = "−"
+
         display_label = (self.product_name if self.product_name
                          else (f"品種番号{self.hinshoku_num}" if self.hinshoku_num is not None else None))
 
         if pd.notna(lot_date) and display_label:
             date_str = f"{lot_date.year}/{lot_date.month}/{lot_date.day}"
-            chart_prefix = f"{date_str}製造 {display_label} "
+            chart_prefix = f"{date_str}製造 {display_label} ロット{self.lot_num}　"
             date_str_safe = date_str.replace("/", "-")
             safe_label = display_label.replace("/", "-").replace("\\", "-")
             default_name = (f"分析結果_{date_str_safe}製造_{safe_label} "
                             f"ロット{self.lot_num}_{datetime.datetime.now():%Y%m%d_%H%M}.xlsx")
         else:
             date_str = None
-            chart_prefix = ""
+            chart_prefix = f"ロット{self.lot_num}　"
             default_name = f"分析結果_ロット{self.lot_num}_{datetime.datetime.now():%Y%m%d_%H%M}.xlsx"
 
         filepath = filedialog.asksaveasfilename(
@@ -517,6 +548,8 @@ class LotDetailDialog(tk.Toplevel):
 
             img_hist = _make_lot_histogram(data, self.mean, self.lower, self.upper, chart_prefix)
             img_series = _make_lot_timeseries(self.df_ok, self.mean, self.lower, self.upper, chart_prefix)
+            img_all_series = _make_all_data_timeseries(
+                self._df_lot, self.mean, self.std, self.lower, self.upper, chart_prefix)
 
             save_to_excel(
                 self.df_ok, self.mean, self.std, self.ci,
@@ -526,6 +559,8 @@ class LotDetailDialog(tk.Toplevel):
                 total_count=self.total_count, original_ok_count=self.original_ok_count,
                 hinshoku_num=self.hinshoku_num, date_str=date_str,
                 product_name=self.product_name,
+                df_all=self._df_lot, img_all_series=img_all_series,
+                mfg_start=mfg_start, mfg_end=mfg_end, mfg_duration=mfg_duration,
             )
             self._export_status_var.set(f"✓ 出力完了: {os.path.basename(filepath)}")
             messagebox.showinfo("完了", f"Excelファイルを出力しました:\n{filepath}", parent=self)
@@ -566,13 +601,13 @@ def _make_lot_histogram(data, mean, lower, upper, title_prefix):
     """ヒストグラム画像を生成してBytesIOで返す"""
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.hist(data, bins=30, edgecolor="black", alpha=0.7)
-    ax.axvline(mean, color="red", linestyle="-", linewidth=2, label=f"平均: {mean:.2f}")
-    ax.axvline(lower, color="orange", linestyle="--", linewidth=2, label=f"下限(-3σ): {lower:.2f}")
-    ax.axvline(upper, color="orange", linestyle="--", linewidth=2, label=f"上限(+3σ): {upper:.2f}")
-    ax.set_title(f"{title_prefix}測定値の分布（n={len(data)}）", fontsize=14, fontweight="bold")
+    ax.axvline(mean, color="red", linestyle="-", linewidth=2, label=f"平均: {mean:.3f}")
+    ax.axvline(lower, color="orange", linestyle="--", linewidth=2, label=f"下限(-3σ): {lower:.3f}")
+    ax.axvline(upper, color="orange", linestyle="--", linewidth=2, label=f"上限(+3σ): {upper:.3f}")
+    ax.set_title(f"{title_prefix}測定値の分布（OK品のみ・n={len(data)}）", fontsize=14, fontweight="bold")
     ax.set_xlabel("測定値(g)", fontsize=12)
     ax.set_ylabel("頻度", fontsize=12)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
@@ -584,7 +619,7 @@ def _make_lot_histogram(data, mean, lower, upper, title_prefix):
 
 
 def _make_lot_timeseries(df_ok, mean, lower, upper, title_prefix):
-    """時系列チャート画像を生成してBytesIOで返す"""
+    """時系列チャート（OK品のみ）画像を生成してBytesIOで返す"""
     fig, ax = plt.subplots(figsize=(12, 5))
 
     y_vals = df_ok["測定値(g)"].values
@@ -612,15 +647,91 @@ def _make_lot_timeseries(df_ok, mean, lower, upper, title_prefix):
     ax.scatter(x_ok, y_ok, color="steelblue", s=18, alpha=0.8, zorder=2, label="OK")
     if len(x_out) > 0:
         ax.scatter(x_out, y_out, color="red", s=50, marker="x",
-                   linewidths=2, zorder=3, label=f"外れ値 ({len(x_out)}件)")
+                   linewidths=2, zorder=3, label=f"外れ値・±3σ超 ({len(x_out)}件)")
 
-    ax.axhline(mean,  color="red",    linewidth=1.5, linestyle="-",  label=f"平均: {mean:.2f}")
-    ax.axhline(upper, color="orange", linewidth=1.5, linestyle="--", label=f"+3σ: {upper:.2f}")
-    ax.axhline(lower, color="orange", linewidth=1.5, linestyle="--", label=f"-3σ: {lower:.2f}")
+        x_out_arr = np.asarray(x_out)
+        max_idx = int(np.argmax(y_out))
+        min_idx = int(np.argmin(y_out))
+        for idx, voffset in [(max_idx, 18), (min_idx, -18)]:
+            ax.annotate(f"{y_out[idx]:.3f}", (x_out_arr[idx], y_out[idx]),
+                        textcoords="offset points", xytext=(0, voffset),
+                        ha="center", va="center", fontsize=9, color="red", fontweight="bold",
+                        zorder=6, bbox=dict(boxstyle="round,pad=0.2", facecolor="white",
+                                             edgecolor="red", alpha=0.9),
+                        arrowprops=dict(arrowstyle="-", color="red", linewidth=0.8))
 
-    ax.set_title(f"{title_prefix}時系列チャート（n={len(df_ok)}）", fontsize=14, fontweight="bold")
+    ax.axhline(mean,  color="red",    linewidth=1.5, linestyle="-",  label=f"平均: {mean:.3f}")
+    ax.axhline(upper, color="orange", linewidth=1.5, linestyle="--", label=f"+3σ: {upper:.3f}")
+    ax.axhline(lower, color="orange", linewidth=1.5, linestyle="--", label=f"-3σ: {lower:.3f}")
+
+    ax.set_title(f"{title_prefix}時系列チャート（OK品のみ・n={len(df_ok)}）", fontsize=14, fontweight="bold")
     ax.set_ylabel("測定値(g)", fontsize=12)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+
+def _make_all_data_timeseries(group, mean, std, lower, upper, title_prefix):
+    """全データ時系列チャート（OK/軽量/過量を色分け）画像を生成してBytesIOで返す"""
+    group_sorted = group.sort_values("日付時刻").reset_index(drop=True)
+    ok_mask    = group_sorted["ランクコード"] == "2"
+    kacho_mask = group_sorted["ランクコード"] == "E"
+    keiry_mask = group_sorted["ランクコード"] == "1"
+
+    y_vals_all  = pd.to_numeric(group_sorted["測定値(g)"], errors="coerce")
+    y_ok_all    = y_vals_all[ok_mask].values
+    y_kacho_all = y_vals_all[kacho_mask].values
+    y_keiry_all = y_vals_all[keiry_mask].values
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    if group_sorted["日付時刻"].notna().any():
+        x_ok_all    = group_sorted.loc[ok_mask,    "日付時刻"]
+        x_kacho_all = group_sorted.loc[kacho_mask, "日付時刻"]
+        x_keiry_all = group_sorted.loc[keiry_mask, "日付時刻"]
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=30, ha="right")
+        ax.set_xlabel("時刻", fontsize=12)
+    else:
+        x_base      = np.arange(1, len(group_sorted) + 1)
+        x_ok_all    = x_base[ok_mask.values]
+        x_kacho_all = x_base[kacho_mask.values]
+        x_keiry_all = x_base[keiry_mask.values]
+        ax.set_xlabel("測定順序", fontsize=12)
+
+    ax.plot(x_ok_all, y_ok_all, color="steelblue", linewidth=0.6, alpha=0.4, zorder=1)
+    ax.scatter(x_ok_all, y_ok_all, color="steelblue", s=18, alpha=0.8, zorder=2,
+               label=f"OK ({ok_mask.sum()}件)")
+    if kacho_mask.any():
+        ax.scatter(x_kacho_all, y_kacho_all, color="red", s=60, marker="^", zorder=4,
+                   label=f"過量 ({kacho_mask.sum()}件)")
+    if keiry_mask.any():
+        ax.scatter(x_keiry_all, y_keiry_all, color="orange", s=60, marker="v", zorder=4,
+                   label=f"軽量 ({keiry_mask.sum()}件)")
+
+    ax.axhline(mean,  color="red",       linewidth=1.5, linestyle="-",  label=f"平均（OK品）: {mean:.3f}")
+    ax.axhline(upper, color="darkorange", linewidth=1.5, linestyle="--", label=f"+3σ（OK品）: {upper:.3f}")
+    ax.axhline(lower, color="darkorange", linewidth=1.5, linestyle="--", label=f"-3σ（OK品）: {lower:.3f}")
+
+    y_lo = mean - 10 * std
+    y_hi = mean + 10 * std
+    data_min = y_vals_all.min()
+    data_max = y_vals_all.max()
+    pad = max((data_max - data_min) * 0.12, std * 2)
+    y_lo = min(y_lo, data_min - pad)
+    y_hi = max(y_hi, data_max + pad)
+    ax.set_ylim(y_lo, y_hi)
+
+    ax.set_title(f"{title_prefix}全データ時系列（n={len(group_sorted)}）", fontsize=14, fontweight="bold")
+    ax.set_ylabel("測定値(g)", fontsize=12)
+    ax.legend(fontsize=10, loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 
@@ -637,9 +748,11 @@ def _make_lot_timeseries(df_ok, mean, lower, upper, title_prefix):
 def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
                           outliers_df, img_hist_bytes, img_series_bytes, rank_counts,
                           total_count, original_ok_count, hinshoku_num, date_str, lot,
-                          product_name=""):
+                          product_name="", img_all_series_bytes=None,
+                          mfg_start="−", mfg_end="−", mfg_duration="−"):
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.drawing.image import Image
+    from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
 
     ws = wb.create_sheet("分析レポート", 0)
 
@@ -654,6 +767,8 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
     val_fill_o  = PatternFill(start_color="FFEFF3FB", fill_type="solid")
     warn_fill   = PatternFill(start_color="FFFFF2CC", fill_type="solid")
     warn_font   = Font(bold=True, size=10, color="FF7F6000")
+    subheader_fill = PatternFill(start_color="FF8EA9C1", fill_type="solid")
+    subheader_font = Font(bold=True, size=9, color="FFFFFFFF")
     thin = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
@@ -664,8 +779,9 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
     # 列幅
     ws.column_dimensions["A"].width = 20
     ws.column_dimensions["B"].width = 13
-    for col in ["D", "E", "F", "G", "H", "I", "J"]:
-        ws.column_dimensions[col].width = 10.4  # D〜J合計 ≈ 13.5cm
+    ws.column_dimensions["C"].width = 12
+    for col in ["E", "F", "G", "H", "I", "J", "K"]:
+        ws.column_dimensions[col].width = 10.4  # E〜K合計 ≈ 13.5cm
 
     ng_count    = total_count - original_ok_count
     defect_rate = (ng_count / total_count * 100) if total_count > 0 else 0.0
@@ -699,32 +815,48 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
     ws.row_dimensions[3].height = 16
 
     # 統計テーブル定義: (ラベル, 値, 書式, 警告フラグ)
+    # ラベルが "__subheader__" の行は小見出しとして描画
     stats_rows = [
-        ("全数",             total_count,                              "0",     False),
-        ("OK数",             original_ok_count,                       "0",     False),
-        ("NG数",             ng_count,                                 "0",     ng_count > 0),
-        ("不良率 (%)",        defect_rate,                              "0.00",  ng_count > 0),
+        ("全数",            total_count,       "0",     False),
+        ("OK数",            original_ok_count, "0",     False),
+        ("NG数",            ng_count,          "0",     ng_count > 0),
+        ("不良率 (%)",       defect_rate,       "0.00",  ng_count > 0),
+        ("__subheader__",  "製造情報",          None,    False),
+        ("開始時刻",         mfg_start,         "@",     False),
+        ("終了時刻",         mfg_end,           "@",     False),
+        ("製造時間",         mfg_duration,      "@",     False),
+        ("__subheader__",  "統計値（OK品のみ）", None,   False),
+        ("平均 (g)",        mean,              "0.000", False),
+        ("標準偏差 (g)",     std,               "0.000", False),
+        ("Max (g)",        max1,              "0.000", False),
+        ("Min (g)",        min1,              "0.000", False),
+        ("下限 −3σ (g)",   lower,             "0.000", False),
+        ("上限 +3σ (g)",   upper,             "0.000", False),
         (None, None, None, False),
-        ("平均 (g)",          mean,                                    "0.0", False),
-        ("標準偏差 (g)",       std,                                    "0.000", False),
-        ("OKデータ件数",      len(df_ok),                              "0",     False),
-        ("Max (g)",          max1,                                    "0.0", False),
-        ("Min (g)",          min1,                                    "0.0", False),
-        ("下限 −3σ (g)",     lower,                                   "0.0", False),
-        ("上限 +3σ (g)",     upper,                                   "0.0", False),
-        (None, None, None, False),
-        ("95% CI 下限 (g)",  ci[0] if ci[0] is not None else "−",    "0.0", False),
-        ("95% CI 上限 (g)",  ci[1] if ci[1] is not None else "−",    "0.0", False),
-        ("外れ値件数",         len(outliers_df),                        "0",     len(outliers_df) > 0),
+        ("95% CI 下限 (g)",  ci[0] if ci[0] is not None else "−",    "0.000", False),
+        ("95% CI 上限 (g)",  ci[1] if ci[1] is not None else "−",    "0.000", False),
+        ("外れ値件数",       len(outliers_df),  "0",     len(outliers_df) > 0),
     ]
 
     data_row = 4
     stripe   = 0
     for label, value, fmt, warn in stats_rows:
-        ws.row_dimensions[data_row].height = 5 if label is None else 14
         if label is None:
+            ws.row_dimensions[data_row].height = 5
             data_row += 1
             continue
+        if label == "__subheader__":
+            ws.merge_cells(f"A{data_row}:B{data_row}")
+            ws[f"A{data_row}"] = value
+            ws[f"A{data_row}"].font      = subheader_font
+            ws[f"A{data_row}"].fill      = subheader_fill
+            ws[f"A{data_row}"].border    = thin
+            ws[f"A{data_row}"].alignment = center
+            ws.row_dimensions[data_row].height = 13
+            data_row += 1
+            continue
+
+        ws.row_dimensions[data_row].height = 14
         vfill = warn_fill if warn else (val_fill_e if stripe % 2 == 0 else val_fill_o)
         vfont = warn_font if warn else Font(size=10)
 
@@ -744,11 +876,11 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
         data_row += 1
         stripe   += 1
 
-    ws.row_dimensions[data_row].height = 7  # 統計〜ランク間ギャップ（行3〜25計≈10.5cm調整）
+    ws.row_dimensions[data_row].height = 7  # 統計〜ランク間ギャップ
 
     # ランクコード集計ミニテーブル
     rank_row = data_row + 1
-    ws.merge_cells(f"A{rank_row}:B{rank_row}")
+    ws.merge_cells(f"A{rank_row}:C{rank_row}")
     ws[f"A{rank_row}"] = "■ ランクコード集計"
     ws[f"A{rank_row}"].font      = sec_font
     ws[f"A{rank_row}"].fill      = sec_fill
@@ -756,8 +888,7 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
     ws.row_dimensions[rank_row].height = 16
 
     rank_header_row = rank_row + 1
-    for ci_idx, col_name in enumerate([ "内容", "件数"]):
-        col_letter = ["A", "B", "C"][ci_idx] if ci_idx < 3 else "A"
+    for ci_idx, col_name in enumerate(["内容", "件数", "比率(%)"]):
         cell = ws.cell(row=rank_header_row, column=ci_idx + 1, value=col_name)
         cell.font      = Font(bold=True, color="FFFFFFFF")
         cell.fill      = PatternFill(start_color="FF4472C4", fill_type="solid")
@@ -768,27 +899,49 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
     for r_idx, row_data in rank_counts[["内容", "件数"]].iterrows():
         r = rank_header_row + 1 + r_idx
         rfill = val_fill_e if r_idx % 2 == 0 else val_fill_o
-        for c_idx, val in enumerate(row_data):
+        ratio = row_data["件数"] / total_count * 100 if total_count > 0 else 0.0
+        for c_idx, val in enumerate([row_data["内容"], row_data["件数"], ratio]):
             cell = ws.cell(row=r, column=c_idx + 1, value=val)
-            cell.fill      = rfill
-            cell.border    = thin
-            cell.alignment = center
+            cell.fill          = rfill
+            cell.border        = thin
+            cell.alignment     = center
+            if c_idx == 2:
+                cell.number_format = "0.00"
         ws.row_dimensions[r].height = 13
 
-    # ヒストグラム (D3:J25 に TwoCellAnchor で固定 ≈ 13.5cm × 10.5cm)
-    from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
+    # ヒストグラム (E3:K27 に TwoCellAnchor で固定 ≈ 13.5cm × 10.5cm)
     img1 = Image(BytesIO(img_hist_bytes))
     img1.width  = 510  # fallback: 13.5cm
     img1.height = 397  # fallback: 10.5cm
     anchor1 = TwoCellAnchor(editAs="twoCell")
-    anchor1._from = AnchorMarker(col=3, colOff=0, row=2,  rowOff=0)  # D3  (0-indexed)
-    anchor1.to    = AnchorMarker(col=9, colOff=0, row=26, rowOff=0)  # J25 (0-indexed)
+    anchor1._from = AnchorMarker(col=4, colOff=0, row=2,  rowOff=0)  # E3  (0-indexed)
+    anchor1.to    = AnchorMarker(col=10, colOff=0, row=26, rowOff=0)  # K27 (0-indexed)
     ws.add_image(img1, anchor1)
 
-    # 時系列チャート (下段)
-    series_row = max(data_row, rank_header_row + len(rank_counts) + 1) + 2
+    # 時系列チャート (下段) ヒストグラムアンカー to=row26(0-indexed) → Excel行27まで占有。行28以降に配置する
+    first_series_row = max(data_row, rank_header_row + len(rank_counts) + 1, 26) + 2
+
+    if img_all_series_bytes is not None:
+        # ① 全データ時系列
+        ws.merge_cells(f"A{first_series_row}:L{first_series_row}")
+        ws[f"A{first_series_row}"] = "■ 全データ時系列"
+        ws[f"A{first_series_row}"].font      = sec_font
+        ws[f"A{first_series_row}"].fill      = sec_fill
+        ws[f"A{first_series_row}"].alignment = center
+        ws.row_dimensions[first_series_row].height = 16
+
+        img3 = Image(BytesIO(img_all_series_bytes))
+        img3.width  = 907
+        img3.height = 378
+        ws.add_image(img3, f"A{first_series_row + 1}")
+
+        # ② 時系列チャート（OK品のみ）
+        series_row = first_series_row + 26
+    else:
+        series_row = first_series_row
+
     ws.merge_cells(f"A{series_row}:L{series_row}")
-    ws[f"A{series_row}"] = "■ 時系列チャート"
+    ws[f"A{series_row}"] = "■ 時系列チャート（OK品のみ）"
     ws[f"A{series_row}"].font      = sec_font
     ws[f"A{series_row}"].fill      = sec_fill
     ws[f"A{series_row}"].alignment = center
@@ -799,12 +952,12 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
     img2.height = 378  # 10cm
     ws.add_image(img2, f"A{series_row + 1}")
 
-    # A4縦・1ページ印刷設定
+    # A4縦・幅1ページ印刷設定（高さは自動）
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.page_setup.orientation = "portrait"
     ws.page_setup.fitToPage = True
     ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 1
+    ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_margins.left = 0.6
     ws.page_margins.right = 0.6
@@ -814,119 +967,59 @@ def _create_report_sheet(wb, df_ok, mean, std, ci, max1, min1, lower, upper,
     ws.page_margins.footer = 0.3
 
 
+def _style_3col_data_sheet(ws, header_fill, header_font, center_align, border):
+    """測定値出力No./日付時刻/測定値(g) の3列データシートに共通スタイルを適用する"""
+    ws.column_dimensions["A"].width = 18
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 15
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center_align
+        cell.border = border
+    for row in ws.iter_rows(min_row=2, min_col=1, max_col=3):
+        for cell in row:
+            cell.border = border
+    for row in ws.iter_rows(min_row=2, min_col=2, max_col=2):
+        for cell in row:
+            cell.number_format = "yyyy-mm-dd hh:mm:ss"
+    ws.auto_filter.ref = f"A1:C{ws.max_row}"
+
+
 def save_to_excel(df_ok, mean, std, ci, max1, min1, lower, upper,
                   outliers_df, img_hist, img_series, rank_counts, filename, lot,
                   total_count=0, original_ok_count=0, hinshoku_num=None, date_str=None,
-                  product_name=""):
+                  product_name="", df_all=None, img_all_series=None,
+                  mfg_start="−", mfg_end="−", mfg_duration="−"):
 
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.drawing.image import Image
 
-    red_fill = PatternFill(start_color="FFFF0000", fill_type="solid")
+    red_fill    = PatternFill(start_color="FFFF0000", fill_type="solid")
     header_fill = PatternFill(start_color="FF4472C4", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFFFF")
-    result_fill = PatternFill(start_color="FFE7E6E6", fill_type="solid")
     center_align = Alignment(horizontal="center", vertical="center")
     border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
     )
 
-    ng_count = total_count - original_ok_count
-    defect_rate = (ng_count / total_count * 100) if total_count > 0 else 0.0
-
-    result_df = pd.DataFrame({
-        "項目": ["全数", "OK数", "NG数", "不良率(%)", "平均", "標準偏差", "データ数", "Max", "Min", "下限(-3σ)", "上限(+3σ)", "95%CI 下限", "95%CI 上限"],
-        "値": [total_count, original_ok_count, ng_count, defect_rate, mean, std, len(df_ok), max1, min1, lower, upper,
-               ci[0] if ci[0] is not None else None, ci[1] if ci[1] is not None else None]
-    })
-
-    display_label = product_name if product_name else (f"品種番号{hinshoku_num}" if hinshoku_num is not None else None)
-    if display_label and date_str:
-        title_str = f"{date_str}製造 {display_label} 統計結果"
-    else:
-        title_str = None
+    df_all_out = (df_all if df_all is not None else df_ok)[
+        ["測定値出力No.", "日付時刻", "測定値(g)", "ランクコード"]
+    ].copy()
+    df_all_out["ランクコード"] = df_all_out["ランクコード"].map(_RANK_LABEL_MAP).fillna(df_all_out["ランクコード"])
 
     with pd.ExcelWriter(filename, engine="openpyxl") as writer:
 
-        result_df.to_excel(writer, sheet_name="統計結果", index=False, startrow=1 if title_str else 0)
-        df_ok[["測定値出力No.", "日付時刻", "測定値(g)"]].to_excel(writer, sheet_name="OKデータ", index=False)
-        outliers_df[["測定値出力No.", "日付時刻", "測定値(g)"]].to_excel(writer, sheet_name="外れ値", index=False)
-        rank_counts.to_excel(writer, sheet_name="ランクコード集計", index=False)
+        df_ok[["測定値出力No.", "日付時刻", "測定値(g)"]].to_excel(writer, sheet_name="全OKデータ", index=False)
+        outliers_df[["測定値出力No.", "日付時刻", "測定値(g)"]].to_excel(writer, sheet_name="全外れ値（±3σ超）", index=False)
+        df_all_out.to_excel(writer, sheet_name="全データ", index=False)
 
         wb = writer.book
 
-        # ===== 統計結果シート =====
-        ws_result = wb["統計結果"]
-        ws_result.column_dimensions["A"].width = 20
-        ws_result.column_dimensions["B"].width = 20
-
-        if title_str:
-            ws_result["A1"] = title_str
-            ws_result["A1"].font = Font(bold=True, size=12)
-            ws_result["A1"].alignment = center_align
-            ws_result.merge_cells("A1:B1")
-            header_row = 2
-            data_start_row = 3
-        else:
-            header_row = 1
-            data_start_row = 2
-
-        for cell in ws_result[header_row]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align
-            cell.border = border
-        for row in ws_result.iter_rows(min_row=data_start_row, max_row=ws_result.max_row):
-            for cell in row:
-                cell.fill = result_fill
-                cell.border = border
-                cell.alignment = center_align
-                if cell.column == 2:
-                    item = ws_result.cell(row=cell.row, column=1).value
-                    if item == "標準偏差":
-                        cell.number_format = "0.000"
-                    elif item in ("データ数", "全数", "OK数", "NG数"):
-                        cell.number_format = "0"
-                    elif item == "不良率(%)":
-                        cell.number_format = "0.00"
-                    else:
-                        cell.number_format = "0.0"
-
-        # ===== ランクコード集計シート =====
-        ws_rank = wb["ランクコード集計"]
-        ws_rank.column_dimensions["A"].width = 15
-        ws_rank.column_dimensions["B"].width = 15
-        ws_rank.column_dimensions["C"].width = 20
-        for cell in ws_rank[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align
-            cell.border = border
-        for row in ws_rank.iter_rows(min_row=2, max_row=ws_rank.max_row):
-            for cell in row:
-                cell.border = border
-                cell.alignment = center_align
-                if row[0].row % 2 == 0:
-                    cell.fill = PatternFill(start_color="FFF2F2F2", fill_type="solid")
-
         # ===== OKデータシート =====
-        ws_ok = wb["OKデータ"]
-        ws_ok.column_dimensions["A"].width = 18
-        ws_ok.column_dimensions["B"].width = 22
-        ws_ok.column_dimensions["C"].width = 15
-        for cell in ws_ok[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = center_align
-            cell.border = border
-        for row in ws_ok.iter_rows(min_row=2, min_col=1, max_col=3):
-            for cell in row:
-                cell.border = border
-        for row in ws_ok.iter_rows(min_row=2, min_col=2, max_col=2):
-            for cell in row:
-                cell.number_format = "yyyy-mm-dd hh:mm:ss"
-        ws_ok.auto_filter.ref = f"A1:C{ws_ok.max_row}"
+        ws_ok = wb["全OKデータ"]
+        _style_3col_data_sheet(ws_ok, header_fill, header_font, center_align, border)
         outlier_ids = set(outliers_df["測定値出力No."].values)
         for row in ws_ok.iter_rows(min_row=2, max_row=ws_ok.max_row):
             if row[0].value in outlier_ids:
@@ -934,39 +1027,67 @@ def save_to_excel(df_ok, mean, std, ci, max1, min1, lower, upper,
                     cell.fill = red_fill
 
         # ===== 外れ値シート =====
-        ws_out = wb["外れ値"]
-        ws_out.column_dimensions["A"].width = 18
-        ws_out.column_dimensions["B"].width = 22
-        ws_out.column_dimensions["C"].width = 15
-        for cell in ws_out[1]:
+        ws_out = wb["全外れ値（±3σ超）"]
+        _style_3col_data_sheet(ws_out, header_fill, header_font, center_align, border)
+
+        # ===== 全データシート =====
+        ws_all = wb["全データ"]
+        ws_all.column_dimensions["A"].width = 18
+        ws_all.column_dimensions["B"].width = 22
+        ws_all.column_dimensions["C"].width = 15
+        ws_all.column_dimensions["D"].width = 12
+        for cell in ws_all[1]:
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = center_align
             cell.border = border
-        for row in ws_out.iter_rows(min_row=2, min_col=1, max_col=3):
+        ng_labels = {"軽量", "過量"}
+        for row in ws_all.iter_rows(min_row=2, max_row=ws_all.max_row):
+            is_ng = row[3].value in ng_labels  # D列 = ランクコード
             for cell in row:
                 cell.border = border
-        for row in ws_out.iter_rows(min_row=2, min_col=2, max_col=2):
-            for cell in row:
-                cell.number_format = "yyyy-mm-dd hh:mm:ss"
-        ws_out.auto_filter.ref = f"A1:C{ws_out.max_row}"
+                cell.alignment = center_align
+                if is_ng:
+                    cell.fill = red_fill
+            row[1].number_format = "yyyy-mm-dd hh:mm:ss"  # B列 = 日付時刻
+        ws_all.auto_filter.ref = f"A1:D{ws_all.max_row}"
 
         # ===== グラフシート =====
         img_hist_bytes   = img_hist.getvalue()
         img_series_bytes = img_series.getvalue()
 
-        ws_hist = wb.create_sheet("ヒストグラム")
+        ws_hist = wb.create_sheet("ヒストグラム（OK品のみ）")
         ws_hist.add_image(Image(BytesIO(img_hist_bytes)), "A1")
 
-        ws_series = wb.create_sheet("時系列チャート")
+        ws_series = wb.create_sheet("時系列チャート（OK品のみ）")
         ws_series.add_image(Image(BytesIO(img_series_bytes)), "A1")
 
-        # ===== 分析レポートシート (先頭に挿入) =====
+        if img_all_series is not None:
+            ws_all_series = wb.create_sheet("全データ時系列")
+            ws_all_series.add_image(Image(BytesIO(img_all_series.getvalue())), "A1")
+
+        # ===== 分析レポートシート =====
         _create_report_sheet(
             wb, df_ok, mean, std, ci, max1, min1, lower, upper,
             outliers_df, img_hist_bytes, img_series_bytes, rank_counts,
             total_count, original_ok_count, hinshoku_num, date_str, lot,
             product_name=product_name,
+            img_all_series_bytes=img_all_series.getvalue() if img_all_series is not None else None,
+            mfg_start=mfg_start, mfg_end=mfg_end, mfg_duration=mfg_duration,
+        )
+
+        # ===== シート順序を整理 =====
+        sheet_order = [
+            "分析レポート",
+            "全データ時系列",
+            "全データ",
+            "ヒストグラム（OK品のみ）",
+            "時系列チャート（OK品のみ）",
+            "全OKデータ",
+            "全外れ値（±3σ超）",
+        ]
+        wb._sheets.sort(
+            key=lambda ws: sheet_order.index(ws.title) if ws.title in sheet_order else len(sheet_order)
         )
 
 
@@ -981,11 +1102,9 @@ def process_lot(group, lot, save_dir, hinshoku_num=None, product_name=""):
         ("skip", ok_count) … OKデータ不足によりスキップ
     """
 
-    rank_map = {"2": "OK", "1": "軽量", "E": "過量", "0": "２個乗り"}
-
     rank_counts = group["ランクコード"].value_counts().reset_index()
     rank_counts.columns = ["ランクコード", "件数"]
-    rank_counts["内容"] = rank_counts["ランクコード"].map(rank_map)
+    rank_counts["内容"] = rank_counts["ランクコード"].map(_RANK_LABEL_MAP)
     rank_counts = rank_counts[["ランクコード", "内容", "件数"]]
 
     total_count = len(group)
@@ -1006,18 +1125,28 @@ def process_lot(group, lot, save_dir, hinshoku_num=None, product_name=""):
     outliers_df = df_ok[(df_ok["測定値(g)"] < lower) | (df_ok["測定値(g)"] > upper)]
 
     lot_date = group["日付時刻"].dropna().min()
+    lot_end  = group["日付時刻"].dropna().max()
+    if pd.notna(lot_date) and pd.notna(lot_end):
+        mfg_start    = lot_date.strftime("%H:%M")
+        mfg_end      = lot_end.strftime("%H:%M")
+        total_min    = int((lot_end - lot_date).total_seconds() / 60)
+        mfg_duration = f"{total_min // 60}時間{total_min % 60:02d}分"
+    else:
+        mfg_start = mfg_end = mfg_duration = "−"
+
     display_label = product_name if product_name else (f"品種番号{hinshoku_num}" if hinshoku_num is not None else None)
     if pd.notna(lot_date) and display_label:
         date_str = f"{lot_date.year}/{lot_date.month}/{lot_date.day}"
-        chart_prefix = f"{date_str}製造 {display_label} "
+        chart_prefix = f"{date_str}製造 {display_label} ロット{lot}　"
         date_str_safe = date_str.replace("/", "-")
     else:
         date_str = None
-        chart_prefix = ""
+        chart_prefix = f"ロット{lot}　"
         date_str_safe = None
 
     img_hist = _make_lot_histogram(data, mean, lower, upper, chart_prefix)
     img_series = _make_lot_timeseries(df_ok, mean, lower, upper, chart_prefix)
+    img_all_series = _make_all_data_timeseries(group, mean, std, lower, upper, chart_prefix)
 
     if date_str_safe and display_label:
         safe_label = display_label.replace("/", "-").replace("\\", "-")
@@ -1036,7 +1165,9 @@ def process_lot(group, lot, save_dir, hinshoku_num=None, product_name=""):
                   img_hist, img_series, rank_counts, filename, lot,
                   total_count=total_count, original_ok_count=original_ok_count,
                   hinshoku_num=hinshoku_num, date_str=date_str,
-                  product_name=product_name)
+                  product_name=product_name,
+                  df_all=group, img_all_series=img_all_series,
+                  mfg_start=mfg_start, mfg_end=mfg_end, mfg_duration=mfg_duration)
 
     return ("ok", len(data))
 

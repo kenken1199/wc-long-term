@@ -500,9 +500,6 @@ class HinshokuDetailDialog(tk.Toplevel):
 
         if dialog.result is None or dialog.result[0] == "cancel":
             return
-        if dialog.result[0] == "manual":
-            messagebox.showwarning("中止", "CSVを手動分割してください", parent=self)
-            return
 
         df_lots = dialog.result[1]
 
