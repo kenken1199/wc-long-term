@@ -1,0 +1,179 @@
+input_base_dir: ''
+output_dir: ''
+product_names:
+  '2': 八味360錠
+  '3': 錠剤S 45T
+  '7': 胃腸薬プラス 50錠
+  '8': 胃腸薬プラス 180錠
+  '9': 胃腸薬プラス 270錠
+  '10': パンラクミン130T
+  '11': パンラクミン 350T
+  '12': パンラクミン 550T
+  '13': 錠剤S 45T
+  '14': 錠剤S 170T
+  '15': 錠剤S 290T
+  '16': コルゲン110錠
+  '18': コッコアポEX 144T
+  '19': コッコアポEX 312T
+  '20': 防風通聖散料 360T
+products:
+  2:
+    name: 八味360T
+    reject_limit_g: 2.1
+  3:
+    name: 錠剤S 45T
+    reject_limit_g: 1.2
+  7:
+    name: 胃腸薬プラス 50T
+    nominal_weight: 70.5
+    reject_limit_g: 1.2
+    normal_sigma: 0.31
+    normal_light_ng_rate: 0.00043
+    normal_heavy_ng_rate: 0.00025
+    normal_twostack_rate: 0.00015
+    normal_device_abnormal_rate: 0.00018
+  8:
+    name: 胃腸薬プラス 180T
+    nominal_weight: 181.62
+    reject_limit_g: 1.2
+    normal_sigma: 0.44
+    normal_light_ng_rate: 0.0026
+    normal_heavy_ng_rate: 0.00149
+    normal_twostack_rate: 0.00034
+    normal_device_abnormal_rate: 0.00022
+  9:
+    name: 胃腸薬プラス 270T
+    reject_limit_g: 1.2
+  10:
+    name: パンラクミン130T
+    reject_limit_g: 1.2
+  11:
+    name: パンラクミン 350T
+    reject_limit_g: 1.2
+  12:
+    name: パンラクミン 550T
+    reject_limit_g: 1.2
+  13:
+    name: 錠剤S 45T
+    nominal_weight: 73.88
+    reject_limit_g: 1.2
+    normal_sigma: 0.288
+    normal_light_ng_rate: 0.00058
+    normal_heavy_ng_rate: 8.0e-05
+    normal_twostack_rate: 0.00014
+    normal_device_abnormal_rate: 0.00013
+  14:
+    name: 錠剤S 170T
+    nominal_weight: 178.95
+    reject_limit_g: 1.2
+    normal_sigma: 0.478
+    normal_light_ng_rate: 0.00281
+    normal_heavy_ng_rate: 0.00183
+    normal_twostack_rate: 0.00055
+    normal_device_abnormal_rate: 0.00028
+  15:
+    name: 錠剤S 290T
+    nominal_weight: 236.19
+    reject_limit_g: 1.2
+    normal_sigma: 0.5
+    normal_light_ng_rate: 0.00295
+    normal_heavy_ng_rate: 0.00191
+    normal_twostack_rate: 0.00039
+    normal_device_abnormal_rate: 0.00039
+  16:
+    name: コルゲン110T
+    reject_limit_g: 1.0
+  18:
+    name: コッコアポEX 144T
+    reject_limit_g: 1.4
+  19:
+    name: コッコアポEX 312T
+    reject_limit_g: 1.4
+  20:
+    name: 防風通聖散料 360T
+    reject_limit_g: 2.8
+ok_rank_codes:
+- '2'
+ok_pass_senbetsu:
+- '1'
+thresholds:
+  defect_rate_multiple: 3.0
+  mean_sigma_multiple: 2.0
+  std_multiple: 1.5
+  min_data_count: 1000
+  double_ride_rate: 0.5
+  device_abnormal_rate: 0.5
+all_data_chart:
+  enabled: true
+  lot_gap_threshold_seconds: 1800
+  y_axis_mode: fixed
+  y_axis_sigma_range: 5
+  reference_lines:
+    show_mean: true
+    show_2sigma: true
+    show_3sigma: true
+    show_reject_limit: false
+    reject_limit_g: 1.2
+ok_only_chart:
+  show_moving_average: true
+  moving_average_window: 1000
+daily_summary:
+  enabled: true
+  output_format: per_day
+  output_directory: ./DailySummary
+  lot_gap_threshold_seconds: 1800
+  min_records_per_lot: 50
+  baseline_period_days: 30
+  exclude_abnormal_days: true
+  reject_limit_g: 1.2
+  thresholds:
+    mean_diff_warn_g: 0.2
+    mean_diff_alert_g: 0.5
+    sigma_ratio_warn: 1.2
+    sigma_ratio_alert: 1.5
+    ng_rate_ratio_warn: 2.0
+    ng_rate_ratio_alert: 5.0
+    twostack_rate_warn: 0.001
+    twostack_rate_alert: 0.003
+    device_abnormal_rate_warn: 0.001
+    device_abnormal_rate_alert: 0.003
+  product_thresholds:
+    P003:
+      mean_diff_warn_g: 0.15
+default_thresholds:
+  mean_diff_warn_g: 0.2
+  mean_diff_alert_g: 0.5
+  sigma_warn_g: 0.4
+  sigma_alert_g: 0.5
+  light_ng_rate_warn: 0.002
+  light_ng_rate_alert: 0.005
+  heavy_ng_rate_warn: 0.002
+  heavy_ng_rate_alert: 0.005
+  twostack_rate_warn: 0.001
+  twostack_rate_alert: 0.003
+  device_abnormal_rate_warn: 0.001
+  device_abnormal_rate_alert: 0.003
+recommended_actions:
+  軽量NG率_異常:
+  - 軽量NG発生時刻のクラスター確認
+  - 部材ロット切替の有無を製造記録で確認
+  - 充填システム設定の確認
+  過量NG率_異常:
+  - 過量NG発生時刻のクラスター確認
+  - 充填システム設定の確認
+  平均下振れ_異常:
+  - 基準値設定時の最初5個と実平均を比較
+  - 基準値妥当性の確認
+  - 充填システムのセンタリング確認
+  平均上振れ_異常:
+  - 基準値設定時の最初5個と実平均を比較
+  - 充填システムのセンタリング確認
+  シグマ増大_異常:
+  - ロット内の重量推移を時系列確認
+  - ドリフト・ばらつき要因の調査
+  二個乗り_異常:
+  - 二個乗り発生時刻の確認
+  - 搬送・供給状態の確認
+  装置異常_異常:
+  - 装置動作異常レコードの時刻・種別確認
+  - 設備保全への連絡検討
